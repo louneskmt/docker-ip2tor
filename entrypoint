@@ -12,7 +12,7 @@ init_tls () {
 		echo "Configuring Let's Encrypt, it may take a while..."
 
 		# generate 4096 bit DH params to strengthen the security, may take a while
-		openssl dhparam -out /etc/ssl/certs/dhparam.pem 100
+		openssl dhparam -out /etc/ssl/certs/dhparam.pem 4096
 
 		# create directory for Let's Encrypt files
 		mkdir -p /var/lib/letsencrypt/.well-known
