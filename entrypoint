@@ -5,7 +5,7 @@ DATADIR=${DATADIR:-"/etc/ip2tor"}
 CONFIG_FILE=${CONFIG_FILE:-"/etc/ip2tor/config.yml"}
 LOG_FILE=${LOG_FILE:-"/etc/ip2tor/logfile.log"}
 
-rm $LOG_FILE
+rm -f $LOG_FILE
 
 init_tls () {
 	if [[ ! -f /etc/ssl/certs/dhparam.pem ]]; then
@@ -63,6 +63,9 @@ echo "##########################"
 echo
 echo "Creating data directory..."
 mkdir -p $DATADIR
+
+echo "Starting Nginx..."
+nginx &
 
 echo "Starting Tor..."
 tor >> $LOG_FILE &
