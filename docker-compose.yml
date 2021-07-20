@@ -2,10 +2,10 @@ version: '3.7'
 
 services:
     ip2tor:
-        image: ip2tor:latest
+        build: ./
+        # image: louneskmt/ip2tor:latest
         ports:
-            - "3005:3005"
-            - "3006:3006"
+            - "3000:3000"
         volumes:
             - $PWD/ip2tor:/etc/ip2tor
 

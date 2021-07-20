@@ -1,0 +1,6 @@
+services:
+  explorer-testnet:
+    port: 3000
+    remote:
+      address: blabla.onion
+      port: 80
