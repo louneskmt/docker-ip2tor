@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATADIR=${DATADIR:-"/etc/ip2tor"}
+CONFIG_FILE=${CONFIG_FILE:-"/etc/ip2tor/config.yml"}
+LOG_FILE=${LOG_FILE:-"/etc/ip2tor/logfile.log"}
+
+rm $LOG_FILE
+
+init_tls () {
+	if [[ ! -f /etc/ssl/certs/dhparam.pem ]]; then
+		echo "Configuring Let's Encrypt, it may take a while..."
+
+		# generate 4096 bit DH params to strengthen the security, may take a while
+		openssl dhparam -out /etc/ssl/certs/dhparam.pem 100
+
+		# create directory for Let's Encrypt files
+		mkdir -p /var/lib/letsencrypt/.well-known
+		chgrp www-data /var/lib/letsencrypt
+		chmod g+s /var/lib/letsencrypt
+
+		echo "Done!"
+	fi
+}
+
+generate_certificate () {
+	domain=$1
+	email=$2
+
+	init_tls
+	certbot certonly --agree-tos --email $email --webroot -w /var/lib/letsencrypt/ -d $domain
+}
+
+setup_nginx_tls () {
+	service=$1
+	port=$2
+	domain=$3
+	email=$4
+
+	# Generate nginx configuration from template
+	cp /etc/nginx/templates/ip2tor-pressl.conf /etc/nginx/sites-available/ip2tor-$service.conf
+	sed -i "s/\${DOMAIN}/$domain/" /etc/nginx/sites-available/ip2tor-$service.conf
+
+	# Enable configuration and reload nginx
+	ln -s /etc/nginx/sites-available/ip2tor-$service.conf /etc/nginx/sites-enabled/
+	nginx -s reload
+
+	# Generate Let's Encrypt certificates
+	generate_certificate $domain $email
+
+	# Update nginx configuration
+	cp /etc/nginx/templates/ip2tor-ssl.conf /etc/nginx/sites-available/ip2tor-$service.conf
+	sed -i "s/\${DOMAIN}/$domain/" /etc/nginx/sites-available/ip2tor-$service.conf
+	sed -i "s/\${PORT}/$port/" /etc/nginx/sites-available/ip2tor-$service.conf
+
+	# Reload nginx
+	nginx -s reload
+}
+
+echo "##########################"
+echo "########  IP2TOR  ########"
+echo "##########################"
+echo
+echo "Creating data directory..."
+mkdir -p $DATADIR
+
+echo "Starting Tor..."
+tor >> $LOG_FILE &
+
+echo "Looking for configuration file at $CONFIG_FILE..."
+if [[ ! -f $CONFIG_FILE ]]; then
+	echo "Configuration file not found, exiting..."
+	exit 1
+else
+	echo "Found! Parsing configuration file..."
+	echo
+fi
+
+length=$(yq eval '.services | length' $CONFIG_FILE)
+echo "Found $length IP2Tor services:"
+echo
+
+services=$(yq eval '.services | keys | .[]' $CONFIG_FILE)
+for service in $services; do
+	port=$(yq eval ".services.$service.port" $CONFIG_FILE)
+	remote_address=$(yq eval ".services.$service.remote.address" $CONFIG_FILE)
+	remote_port=$(yq eval ".services.$service.remote.port // 80" $CONFIG_FILE)
+	tls=$(yq eval ".services.$service | has(\"tls\")" $CONFIG_FILE)
+	if [[ $tls == "true" ]]; then
+		tls_domain=$(yq eval ".services.$service.tls.domain" $CONFIG_FILE)
+		tls_email=$(yq eval ".services.$service.tls.email" $CONFIG_FILE)
+	fi
+
+	if [[ "$port" == "" || "$port" == "null" ]]; then
+		echo "Error: no port specified for the service $service."
+		exit 1
+	fi;
+
+	if [[ "$remote_address" == "" || "$remote_address" == "null" ]]; then
+		echo "Error: no remote address specified for the service $service."
+		exit 1
+	fi;
+
+	echo " - Name: $service"
+	echo "   Port: $port"
+	echo "   Remote: $remote_address:$remote_port"
+	if [[ $tls == "true" ]]; then
+		echo "   TLS enabled:"
+		echo "       Domain: $tls_domain"
+		echo "       Email: $tls_email"
+	fi
+	echo
+
+	echo "   -> Starting..."
+	socat TCP4-LISTEN:${port},reuseaddr,fork,keepalive SOCKS4A:127.0.0.1:${remote_address}:${remote_port},socksport=9050 &
+
+	if [[ $tls == "true" ]]; then
+		echo "   -> Setting up TLS..."
+		setup_nginx_tls $service $port $tls_domain $tls_email >> $LOG_FILE
+	fi
+	echo "   -> Service started!"
+	echo
+done
+
+echo "All services started!"
+echo
+
+tail -f $LOG_FILE
